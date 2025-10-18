@@ -1,62 +1,56 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import { signIn, signOut as firebaseSignOut, onAuthChange } from "@/lib/firebase-auth";
 
-const OWNER_AUTH_STORAGE_KEY = "owner-dashboard-authenticated";
 const OWNER_EMAIL = "owner@cablehq.com";
 const OWNER_PASSWORD = "SecurePass123!";
 
 interface OwnerAuthContextValue {
   isAuthenticated: boolean;
-  login: (email: string, password: string) => boolean;
-  logout: () => void;
+  login: (email: string, password: string) => Promise<boolean>;
+  logout: () => Promise<void>;
+  loading: boolean;
 }
 
 const OwnerAuthContext = createContext<OwnerAuthContextValue | undefined>(undefined);
 
 export const OwnerAuthProvider = ({ children }: { children: React.ReactNode }) => {
-  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => {
-    if (typeof window === "undefined") {
-      return false;
-    }
-
-    return window.localStorage.getItem(OWNER_AUTH_STORAGE_KEY) === "true";
-  });
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
+  const [loading, setLoading] = useState<boolean>(true);
 
   useEffect(() => {
-    if (typeof window === "undefined") {
-      return;
-    }
-
-    const handleStorage = (event: StorageEvent) => {
-      if (event.key === OWNER_AUTH_STORAGE_KEY) {
-        setIsAuthenticated(event.newValue === "true");
+    const unsubscribe = onAuthChange((user) => {
+      if (user && user.email === OWNER_EMAIL) {
+        setIsAuthenticated(true);
+      } else {
+        setIsAuthenticated(false);
       }
-    };
+      setLoading(false);
+    });
 
-    window.addEventListener("storage", handleStorage);
-    return () => window.removeEventListener("storage", handleStorage);
+    return () => unsubscribe();
   }, []);
 
-  const login = useCallback((email: string, password: string) => {
+  const login = useCallback(async (email: string, password: string) => {
     const normalizedEmail = email.trim().toLowerCase();
     const normalizedPassword = password.trim();
 
-    const success = normalizedEmail === OWNER_EMAIL && normalizedPassword === OWNER_PASSWORD;
-
-    if (success) {
-      setIsAuthenticated(true);
-      if (typeof window !== "undefined") {
-        window.localStorage.setItem(OWNER_AUTH_STORAGE_KEY, "true");
-      }
+    if (normalizedEmail !== OWNER_EMAIL || normalizedPassword !== OWNER_PASSWORD) {
+      return false;
     }
 
-    return success;
+    try {
+      await signIn(normalizedEmail, normalizedPassword);
+      setIsAuthenticated(true);
+      return true;
+    } catch (error) {
+      console.error('Owner login failed:', error);
+      return false;
+    }
   }, []);
 
-  const logout = useCallback(() => {
+  const logout = useCallback(async () => {
+    await firebaseSignOut();
     setIsAuthenticated(false);
-    if (typeof window !== "undefined") {
-      window.localStorage.removeItem(OWNER_AUTH_STORAGE_KEY);
-    }
   }, []);
 
   const value = useMemo(
@@ -64,8 +58,9 @@ export const OwnerAuthProvider = ({ children }: { children: React.ReactNode }) =
       isAuthenticated,
       login,
       logout,
+      loading,
     }),
-    [isAuthenticated, login, logout],
+    [isAuthenticated, login, logout, loading],
   );
 
   return <OwnerAuthContext.Provider value={value}>{children}</OwnerAuthContext.Provider>;

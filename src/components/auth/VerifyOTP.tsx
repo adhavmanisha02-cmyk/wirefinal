@@ -2,8 +2,8 @@ import { useState, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { InputOTP, InputOTPGroup, InputOTPSlot } from '@/components/ui/input-otp';
 import { Label } from '@/components/ui/label';
-import { supabase } from '@/lib/supabase';
 import { toast } from 'sonner';
+import { useUserAuth } from '@/context/UserAuthContext';
 
 interface VerifyOTPProps {
   phoneNumber: string;
@@ -16,6 +16,7 @@ export function VerifyOTP({ phoneNumber, onVerified, onBack }: VerifyOTPProps) {
   const [loading, setLoading] = useState(false);
   const [resendDisabled, setResendDisabled] = useState(true);
   const [countdown, setCountdown] = useState(60);
+  const { verifyOtp, requestOtp } = useUserAuth();
 
   useEffect(() => {
     if (countdown > 0) {
@@ -35,15 +36,7 @@ export function VerifyOTP({ phoneNumber, onVerified, onBack }: VerifyOTPProps) {
     setLoading(true);
 
     try {
-      const { error } = await supabase.auth.verifyOtp({
-        phone: phoneNumber,
-        token: otp,
-        type: 'sms',
-      });
-
-      if (error) throw error;
-
-      toast.success('Phone verified successfully!');
+      await verifyOtp(otp);
       onVerified();
     } catch (error: any) {
       console.error('Error verifying OTP:', error);
@@ -57,13 +50,7 @@ export function VerifyOTP({ phoneNumber, onVerified, onBack }: VerifyOTPProps) {
     setLoading(true);
 
     try {
-      const { error } = await supabase.auth.signInWithOtp({
-        phone: phoneNumber,
-      });
-
-      if (error) throw error;
-
-      toast.success('OTP resent successfully!');
+      await requestOtp(phoneNumber);
       setCountdown(60);
       setResendDisabled(true);
       setOtp('');
@@ -77,6 +64,7 @@ export function VerifyOTP({ phoneNumber, onVerified, onBack }: VerifyOTPProps) {
 
   return (
     <div className="space-y-6">
+      <div id="recaptcha-container"></div>
       <div className="space-y-2">
         <Label className="text-center block">
           Enter the code sent to {phoneNumber}

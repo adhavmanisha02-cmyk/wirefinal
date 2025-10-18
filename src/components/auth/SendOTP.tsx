@@ -3,8 +3,8 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { supabase } from '@/lib/supabase';
 import { toast } from 'sonner';
+import { useUserAuth } from '@/context/UserAuthContext';
 
 interface SendOTPProps {
   onOTPSent: (phoneNumber: string) => void;
@@ -14,6 +14,7 @@ export function SendOTP({ onOTPSent }: SendOTPProps) {
   const [countryCode, setCountryCode] = useState('+91');
   const [phoneNumber, setPhoneNumber] = useState('');
   const [loading, setLoading] = useState(false);
+  const { requestOtp } = useUserAuth();
 
   const handlePhoneChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const value = e.target.value.replace(/\D/g, '');
@@ -30,13 +31,7 @@ export function SendOTP({ onOTPSent }: SendOTPProps) {
     setLoading(true);
 
     try {
-      const { error } = await supabase.auth.signInWithOtp({
-        phone: fullPhoneNumber,
-      });
-
-      if (error) throw error;
-
-      toast.success('OTP sent successfully!');
+      await requestOtp(fullPhoneNumber);
       onOTPSent(fullPhoneNumber);
     } catch (error: any) {
       console.error('Error sending OTP:', error);
@@ -48,6 +43,7 @@ export function SendOTP({ onOTPSent }: SendOTPProps) {
 
   return (
     <div className="space-y-4">
+      <div id="recaptcha-container"></div>
       <div className="space-y-2">
         <Label htmlFor="phone">Phone Number</Label>
         <div className="flex gap-2">

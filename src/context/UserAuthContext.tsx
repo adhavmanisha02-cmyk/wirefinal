@@ -1,21 +1,16 @@
 import { ReactNode, createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
-import { sendOTP, verifyOTP } from "@/lib/phone-auth";
-
-const USER_AUTH_STORAGE_KEY = "wirebazaar-user";
-
-type UserProfile = {
-  id: string;
-  phoneNumber: string;
-  lastLoginAt: string;
-};
+import { onAuthChange, getCurrentUser, sendPhoneOTP, verifyPhoneOTP } from "@/lib/firebase-auth";
+import { usersDB, UserProfile } from "@/lib/firebase-db";
+import { ConfirmationResult } from "firebase/auth";
 
 type UserAuthContextValue = {
   user: UserProfile | null;
   isAuthenticated: boolean;
   requestOtp: (phoneNumber: string) => Promise<void>;
-  verifyOtp: (phoneNumber: string, otp: string) => Promise<void>;
+  verifyOtp: (otp: string) => Promise<void>;
   logout: () => void;
+  loading: boolean;
 };
 
 const UserAuthContext = createContext<UserAuthContextValue | undefined>(undefined);
@@ -26,18 +21,32 @@ const isValidPhone = (value: string) => {
 
 export const UserAuthProvider = ({ children }: { children: ReactNode }) => {
   const [user, setUser] = useState<UserProfile | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [confirmationResult, setConfirmationResult] = useState<ConfirmationResult | null>(null);
 
   useEffect(() => {
-    try {
-      const stored = localStorage.getItem(USER_AUTH_STORAGE_KEY);
-      if (!stored) return;
-      const parsed: UserProfile = JSON.parse(stored);
-      if (parsed?.phoneNumber) {
-        setUser(parsed);
+    const unsubscribe = onAuthChange(async (firebaseUser) => {
+      if (firebaseUser) {
+        const phoneNumber = firebaseUser.phoneNumber || '';
+        let userProfile = await usersDB.getById(firebaseUser.uid);
+
+        if (!userProfile) {
+          await usersDB.create(firebaseUser.uid, {
+            phone: phoneNumber,
+            name: firebaseUser.displayName || undefined,
+            email: firebaseUser.email || undefined
+          });
+          userProfile = await usersDB.getById(firebaseUser.uid);
+        }
+
+        setUser(userProfile);
+      } else {
+        setUser(null);
       }
-    } catch (error) {
-      console.error("Failed to restore user session", error);
-    }
+      setLoading(false);
+    });
+
+    return () => unsubscribe();
   }, []);
 
   const requestOtp = useCallback(async (phoneNumber: string) => {
@@ -47,51 +56,49 @@ export const UserAuthProvider = ({ children }: { children: ReactNode }) => {
     }
 
     const formattedPhone = trimmed.startsWith('+91') ? trimmed : `+91${trimmed}`;
-    const result = await sendOTP(formattedPhone);
 
-    if (!result.success) {
-      throw new Error(result.message);
+    try {
+      const result = await sendPhoneOTP(formattedPhone);
+      setConfirmationResult(result);
+
+      toast.success("OTP sent successfully.", {
+        description: "Please check your phone for the verification code.",
+      });
+    } catch (error: any) {
+      console.error('Error sending OTP:', error);
+      throw new Error(error.message || "Failed to send OTP. Please try again.");
     }
-
-    toast.success("OTP sent successfully.", {
-      description: result.message,
-    });
   }, []);
 
   const verifyOtp = useCallback(
-    async (phoneNumber: string, otp: string) => {
-      const trimmedPhone = phoneNumber.trim();
-
+    async (otp: string) => {
       if (!/^[0-9]{6}$/.test(otp.trim())) {
         throw new Error("Enter the 6-digit OTP sent to you.");
       }
 
-      const formattedPhone = trimmedPhone.startsWith('+91') ? trimmedPhone : `+91${trimmedPhone}`;
-      const result = await verifyOTP(formattedPhone, otp.trim());
-
-      if (!result.success || !result.userId) {
-        throw new Error(result.message);
+      if (!confirmationResult) {
+        throw new Error("Please request an OTP first.");
       }
 
-      const profile: UserProfile = {
-        id: result.userId,
-        phoneNumber: formattedPhone,
-        lastLoginAt: new Date().toISOString(),
-      };
+      try {
+        await verifyPhoneOTP(confirmationResult, otp.trim());
 
-      setUser(profile);
-      localStorage.setItem(USER_AUTH_STORAGE_KEY, JSON.stringify(profile));
-
-      toast.success("Login successful.", {
-        description: "You are now securely logged in.",
-      });
+        toast.success("Login successful.", {
+          description: "You are now securely logged in.",
+        });
+      } catch (error: any) {
+        console.error('Error verifying OTP:', error);
+        throw new Error(error.message || "Invalid OTP. Please try again.");
+      }
     },
-    [],
+    [confirmationResult],
   );
 
-  const logout = useCallback(() => {
+  const logout = useCallback(async () => {
+    const { signOut } = await import("@/lib/firebase-auth");
+    await signOut();
     setUser(null);
-    localStorage.removeItem(USER_AUTH_STORAGE_KEY);
+    setConfirmationResult(null);
     toast.info("You have been logged out.");
   }, []);
 
@@ -102,8 +109,9 @@ export const UserAuthProvider = ({ children }: { children: ReactNode }) => {
       requestOtp,
       verifyOtp,
       logout,
+      loading,
     }),
-    [logout, requestOtp, user, verifyOtp],
+    [logout, requestOtp, user, verifyOtp, loading],
   );
 
   return <UserAuthContext.Provider value={value}>{children}</UserAuthContext.Provider>;
